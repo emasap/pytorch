@@ -51,7 +51,8 @@ static void two_pass_reduction(TensorIteratorBase& iter, loop2d_t loop) {
 
   auto buffer_stride = buffer.strides()[0] * buffer.element_size();
   auto buffer_0 = buffer[0];
-  auto first_reduce = TensorIterator::reduce_op(buffer_0, iter.input(0));
+  bool use_add_reduce_op = (buffer_0.scalar_type() == kFloat && iter.dtype(1) == kBFloat16);
+  auto first_reduce = TensorIterator::reduce_op(buffer_0, iter.input(0), use_add_reduce_op);
   TORCH_INTERNAL_ASSERT(first_reduce.output(0).is_alias_of(buffer_0));
 
   at::parallel_for(0, iter.numel(), internal::GRAIN_SIZE, [&](int64_t begin, int64_t end) {
@@ -66,9 +67,12 @@ static void two_pass_reduction(TensorIteratorBase& iter, loop2d_t loop) {
     at::internal::serial_for_each(shape, strides, base_ptrs.data(),
                                   base_ptrs.size(), loop, {begin, end});
   });
-
-  auto final_reduce = TensorIterator::reduce_op(unsqueezed, buffer);
-  final_reduce.for_each(loop);
+  if (use_add_reduce_op) {
+    unsqueezed.copy_(buffer.sum(0));
+  } else {
+    auto final_reduce = TensorIterator::reduce_op(unsqueezed, buffer);
+    final_reduce.for_each(loop);
+  }
 }
 
 /// Chooses a dimension over which to parallelize. Prefers the outer-most

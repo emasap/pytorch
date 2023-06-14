@@ -1162,12 +1162,24 @@ TORCH_IMPL_FUNC(sum_out)
  bool keepdim,
  optional<ScalarType> opt_dtype,
  const Tensor& result) {
-  auto iter = meta::make_reduction_from_out_ty(self, result, opt_dim, keepdim, result.scalar_type());
-  if (iter.numel() == 0) {
-    result.zero_();
+  if (result.scalar_type() == kBFloat16 || result.scalar_type() == kHalf) {
+    auto buffer = at::empty_like(result, result.options().dtype(kFloat));
+    auto iter = meta::make_reduction_from_out_ty(self, buffer, opt_dim, keepdim, result.scalar_type(), /*use acc buffer*/true);
+    if (iter.numel() == 0) {
+      buffer.zero_();
+    } else {
+      sum_stub(iter.device_type(), iter);
+    }
+    result.copy_(buffer);
   } else {
-    sum_stub(iter.device_type(), iter);
+    auto iter = meta::make_reduction_from_out_ty(self, result, opt_dim, keepdim, result.scalar_type());
+    if (iter.numel() == 0) {
+      result.zero_();
+    } else {
+      sum_stub(iter.device_type(), iter);
+    }
   }
+
 }
 
 Tensor sum(const Tensor &self, c10::optional<ScalarType> dtype) {

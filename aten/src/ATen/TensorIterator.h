@@ -733,7 +733,7 @@ struct TORCH_API TensorIterator final : public TensorIteratorBase {
   static TensorIterator nullary_op(TensorBase& out);
   static TensorIterator borrowing_nullary_op(const TensorBase& out);
   static TensorIterator borrowing_nullary_op(TensorBase&& out) = delete;
-  static TensorIterator reduce_op(TensorBase& out, const TensorBase& a);
+  static TensorIterator reduce_op(TensorBase& out, const TensorBase& a, bool acc_buffer=false);
   static TensorIterator reduce_op(
       TensorBase& out1,
       TensorBase& out2,

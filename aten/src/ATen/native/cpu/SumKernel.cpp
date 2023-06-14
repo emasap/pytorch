@@ -527,7 +527,8 @@ void scalar_outer_sum(
 // Custom floating point sum for better accuracy
 template <bool ignore_nan, typename scalar_t>
 void cascade_sum(TensorIterator &iter) {
-  iter.output_base().fill_(scalar_t(0));
+  using acc_t = at::acc_type<scalar_t, true>;
+  iter.output_base().fill_(acc_t(0));
   iter.parallel_reduce(
     [&](char** data, const int64_t* strides, int64_t size0, int64_t size1) {
       // NOLINTNEXTLINE(modernize-avoid-c-arrays,cppcoreguidelines-avoid-c-arrays)
@@ -552,14 +553,14 @@ void cascade_sum(TensorIterator &iter) {
           // NOLINTNEXTLINE(modernize-avoid-c-arrays,cppcoreguidelines-avoid-c-arrays)
           int64_t inner_strides[3] = { strides[0], strides[0], strides[1] };
           if constexpr (ignore_nan) {
-              basic_loop(ptrs, inner_strides, 0, size0, [](scalar_t a, scalar_t b) {
-                auto a_notnan = at::_isnan(a) ? scalar_t(0) : a;
-                auto b_notnan = at::_isnan(b) ? scalar_t(0) : b;
+              basic_loop(ptrs, inner_strides, 0, size0, [](acc_t a, scalar_t b) -> acc_t {
+                auto a_notnan = at::_isnan(a) ? acc_t(0) : a;
+                auto b_notnan = at::_isnan(b) ? acc_t(0) : acc_t(b);
                 return a_notnan + b_notnan;
               });
           } else {
               basic_loop(ptrs, inner_strides, 0, size0,
-                         [](scalar_t a, scalar_t b) { return a + b; });
+                         [](acc_t a, scalar_t b) -> acc_t { return a + b; });
           }
         });
         return;
@@ -569,13 +570,12 @@ void cascade_sum(TensorIterator &iter) {
       TORCH_INTERNAL_ASSERT(out_strides[0] == 0);
 
       using vec_t = Vectorized<scalar_t>;
-      using acc_t = at::acc_type<scalar_t, true>;
       using vacc_t = Vectorized<acc_t>;
       using ScalarLoadPolicy = std::conditional_t<
           ignore_nan,
           NanSumCastLoadPolicy<scalar_t, acc_t>,
           CastLoadPolicy<scalar_t, acc_t>>;
-      using StorePolicy = CastStoreAccumulate<scalar_t, acc_t>;
+      using StorePolicy = CastStoreAccumulate<acc_t, acc_t>;
 
       if (in_strides[0] == sizeof(scalar_t) && size0 >= vec_t::size()) {
         // Contiguous inner reduction
@@ -604,7 +604,7 @@ void cascade_sum(TensorIterator &iter) {
 }
 
 void sum_kernel_impl(TensorIterator &iter) {
-  if (isIntegralType(iter.dtype(), /*includeBool=*/ true)) {
+  if (isIntegralType(iter.dtype(1), /*includeBool=*/ true)) {
     AT_DISPATCH_INTEGRAL_TYPES_AND(ScalarType::Bool, iter.dtype(), "sum_cpu",
       [&] {
         binary_kernel_reduce_vec(
@@ -615,7 +615,7 @@ void sum_kernel_impl(TensorIterator &iter) {
   }
 
   AT_DISPATCH_FLOATING_AND_COMPLEX_TYPES_AND2(
-      ScalarType::BFloat16, ScalarType::Half, iter.dtype(), "sum_cpu", [&] {
+      ScalarType::BFloat16, ScalarType::Half, iter.dtype(1), "sum_cpu", [&] {
     cascade_sum</*ignore_nan=*/false, scalar_t>(iter);
   });
 }

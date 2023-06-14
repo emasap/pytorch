@@ -184,7 +184,7 @@ static Tensor review_reduce_result(const Tensor& result, int ndim, DimMask mask,
 static TensorIterator make_reduction(
     const char* name, Tensor& result, const Tensor& self,
     at::OptionalIntArrayRef dim_opt,
-    bool keepdim, ScalarType in_dtype, ScalarType out_dtype) {
+    bool keepdim, ScalarType in_dtype, ScalarType out_dtype, bool acc_buffer=false) {
   // check that result type and dtype match if provided
   TORCH_CHECK(
       !result.defined() || result.scalar_type() == out_dtype,
@@ -201,14 +201,14 @@ static TensorIterator make_reduction(
   auto viewed_result = review_reduce_result(result, ndim, mask, keepdim);
   namedinference::propagate_names_for_reduction(result, self, dim, keepdim);
   if (self.scalar_type() == in_dtype) {
-    return TensorIterator::reduce_op(viewed_result, self);
+    return TensorIterator::reduce_op(viewed_result, self, acc_buffer);
   }
-  return TensorIterator::reduce_op(viewed_result, self.to(in_dtype));
+  return TensorIterator::reduce_op(viewed_result, self.to(in_dtype), acc_buffer);
 }
 
 static C10_UNUSED TensorIterator make_reduction(
     const char* name, Tensor& result, const Tensor& self,
-    at::OptionalIntArrayRef dim, bool keepdim, ScalarType out_dtype) {
+    at::OptionalIntArrayRef dim, bool keepdim, ScalarType out_dtype, bool acc_buffer=false) {
   // special case for type promotion in mixed precision, improves computational
   // efficiency.
   // not generalize this to common mismatched input/output types to avoid cross
@@ -218,7 +218,7 @@ static C10_UNUSED TensorIterator make_reduction(
   auto in_dtype = gpu_lowp_to_f32 ? self.scalar_type()
                    : self.is_complex() ? c10::toComplexType(out_dtype)
                                        : out_dtype;
-  return make_reduction(name, result, self, dim, keepdim, in_dtype, out_dtype);
+  return make_reduction(name, result, self, dim, keepdim, in_dtype, out_dtype, acc_buffer);
 }
 
 static TensorIterator make_reduction(
@@ -392,15 +392,16 @@ static TensorIterator make_reduction(
     const Tensor& result,
     OptionalIntArrayRef opt_dims,
     bool keepdim,
-    ScalarType in_dtype) {
+    ScalarType in_dtype,
+    bool acc_buffer=false) {
   int64_t ndim = self.dim();
   auto mask = at::native::make_dim_mask(opt_dims, ndim);
   auto viewed_result =
       at::native::review_reduce_result(result, ndim, mask, keepdim);
   if (self.scalar_type() == in_dtype) {
-    return TensorIterator::reduce_op(viewed_result, self);
+    return TensorIterator::reduce_op(viewed_result, self, acc_buffer);
   }
-  return TensorIterator::reduce_op(viewed_result, self.to(in_dtype));
+  return TensorIterator::reduce_op(viewed_result, self.to(in_dtype), acc_buffer);
 }
 
 static TensorIterator make_reduction(
@@ -430,7 +431,8 @@ static C10_UNUSED TensorIterator make_reduction_from_out_ty(
     const Tensor& result,
     OptionalIntArrayRef opt_dims,
     bool keepdim,
-    ScalarType out_dtype) {
+    ScalarType out_dtype,
+    bool acc_buffer=false) {
   // special case for type promotion in mixed precision, improves computational
   // efficiency.
   // not generalize this to common mismatched input/output types to avoid cross
@@ -440,7 +442,7 @@ static C10_UNUSED TensorIterator make_reduction_from_out_ty(
        (self.scalar_type() == kHalf || self.scalar_type() == kBFloat16) &&
        out_dtype == kFloat);
   auto in_dtype = gpu_lowp_to_f32 ? self.scalar_type() : out_dtype;
-  return make_reduction(self, result, opt_dims, keepdim, in_dtype);
+  return make_reduction(self, result, opt_dims, keepdim, in_dtype, acc_buffer);
 }
 
 } // namespace at::meta

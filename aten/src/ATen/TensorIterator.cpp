@@ -1097,7 +1097,7 @@ TensorIterator TensorIterator::borrowing_nullary_op(const TensorBase& out) {
     .build();
 }
 
-TensorIterator TensorIterator::reduce_op(TensorBase& out, const TensorBase& a) {
+TensorIterator TensorIterator::reduce_op(TensorBase& out, const TensorBase& a, bool acc_buffer) {
   TORCH_INTERNAL_ASSERT(out.defined());
   return TensorIteratorConfig()
     .set_check_mem_overlap(false)
@@ -1106,7 +1106,9 @@ TensorIterator TensorIterator::reduce_op(TensorBase& out, const TensorBase& a) {
     .resize_outputs(false)
     .is_reduction(true)
     // TODO: not supporting casting to outputs is only really necessary for arg{min,max}
-    .promote_inputs_to_common_dtype(true)
+    .promote_inputs_to_common_dtype(!acc_buffer)
+    .cast_common_dtype_to_outputs(!acc_buffer)
+    .check_all_same_dtype(!acc_buffer)
     .build();
 }
 
