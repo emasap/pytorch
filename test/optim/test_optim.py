@@ -789,6 +789,10 @@ class TestOptim(TestCase):
             (optim.NAdam, dict(weight_decay=1.0, momentum_decay=6e-3)),
             (optim.NAdam, dict(weight_decay=0.0, momentum_decay=4e-3)),
             (optim.NAdam, dict(weight_decay=0.01, momentum_decay=4e-3)),
+            (optim.NAdamW, dict(weight_decay=0.0, momentum_decay=6e-3)),
+            (optim.NAdamW, dict(weight_decay=1.0, momentum_decay=6e-3)),
+            (optim.NAdamW, dict(weight_decay=0.0, momentum_decay=4e-3)),
+            (optim.NAdamW, dict(weight_decay=0.01, momentum_decay=4e-3)),
             (
                 optim.SGD,
                 dict(lr=0.2, momentum=1, dampening=0, weight_decay=1, nesterov=True),
@@ -1178,6 +1182,47 @@ class TestOptim(TestCase):
             optim.NAdam(None, lr=1e-2, betas=(1.0, 0.0))
         with self.assertRaisesRegex(ValueError, "Invalid momentum_decay value: -0.2"):
             optim.NAdam(None, lr=1e-2, momentum_decay=-0.2)
+
+    def test_nadamw(self):
+        self._test_basic_cases(
+            lambda weight, bias, foreach: optim.NAdamW(
+                self._build_params_dict(weight, bias, lr=1e-2), lr=1e-3, foreach=foreach
+            ),
+            constructor_accepts_foreach=True,
+        )
+        self._test_basic_cases(
+            lambda weight, bias, foreach: optim.NAdamW(
+                [weight, bias], lr=1e-3, foreach=foreach
+            ),
+            constructor_accepts_foreach=True,
+        )
+        self._test_basic_cases(
+            lambda weight, bias, foreach: optim.NAdamW(
+                [weight, bias],
+                lr=1e-3,
+                weight_decay=0.1,
+                momentum_decay=6e-3,
+                foreach=foreach,
+            ),
+            constructor_accepts_foreach=True,
+        )
+        self._test_basic_cases(
+            lambda weight, bias, foreach: optim.NAdamW(
+                [weight, bias],
+                lr=1e-3,
+                weight_decay=0.1,
+                momentum_decay=6e-3,
+                foreach=foreach,
+            ),
+            [lambda opt: ExponentialLR(opt, gamma=0.9)],
+            constructor_accepts_foreach=True,
+        )
+        with self.assertRaisesRegex(
+            ValueError, "Invalid beta parameter at index 0: 1.0"
+        ):
+            optim.NAdamW(None, lr=1e-2, betas=(1.0, 0.0))
+        with self.assertRaisesRegex(ValueError, "Invalid momentum_decay value: -0.2"):
+            optim.NAdamW(None, lr=1e-2, momentum_decay=-0.2)
 
     def test_adagrad(self):
         self._test_basic_cases(
@@ -1573,6 +1618,7 @@ class TestOptim(TestCase):
             optim.Adam,
             optim.RAdam,
             optim.NAdam,
+            optim.NAdamW,
             optim.Adagrad,
             optim.Adamax,
             optim.RMSprop,
@@ -1594,6 +1640,7 @@ class TestOptim(TestCase):
             optim.Adam,
             optim.RAdam,
             optim.NAdam,
+            optim.NAdamW,
             optim.Adagrad,
             optim.Adamax,
             optim.RMSprop,
@@ -2062,6 +2109,29 @@ class TestDifferentiableOptimizer(TestCase):
             ),
         )
 
+    def test_nadamw(self):
+        state = {}
+        p = torch.rand(10, requires_grad=True, dtype=torch.float64)
+        grad = torch.rand(10, requires_grad=True, dtype=torch.float64)
+        # `step` is not a continuous variable (even though we define it as a float)
+        # and so it shouldn't require gradients.
+        state["step"] = torch.tensor(10.0, requires_grad=False, dtype=torch.float64)
+        state["exp_avg"] = torch.rand(10, requires_grad=True, dtype=torch.float64)
+        state["exp_avg_sq"] = torch.rand(10, requires_grad=True, dtype=torch.float64)
+        state["mu_product"] = torch.tensor(1.0, requires_grad=True, dtype=torch.float64)
+
+        gradcheck(
+            _diff_fn,
+            (
+                p,
+                grad,
+                state,
+                torch.optim.NAdamW,
+                {"lr": 0.9, "differentiable": True},
+                *state.values(),
+            ),
+        )
+
     def test_radam(self):
         state = {}
         p = torch.rand(10, requires_grad=True, dtype=torch.float64)
@@ -2087,11 +2157,13 @@ class TestDifferentiableOptimizer(TestCase):
 
     @unittest.skipIf(not TEST_CUDA, "test requires CUDA")
     def test_defaults_changed_to_foreach(self):
-        from torch.optim import (adam, adamw, nadam, sgd, radam, rmsprop, rprop,
-                                 asgd, adamax, adadelta, adagrad)
+        from torch.optim import (adam, adamw, nadam, nadamw, sgd, radam,
+                                 rmsprop, rprop, asgd, adamax, adadelta,
+                                 adagrad)
         multi_optims = ((optim.Adam, adam, "_multi_tensor_adam"),
                         (optim.AdamW, adamw, "_multi_tensor_adamw"),
                         (optim.NAdam, nadam, "_multi_tensor_nadam"),
+                        (optim.NAdamW, nadamw, "_multi_tensor_nadamw"),
                         (optim.SGD, sgd, "_multi_tensor_sgd"),
                         (optim.RAdam, radam, "_multi_tensor_radam"),
                         (optim.RMSprop, rmsprop, "_multi_tensor_rmsprop"),
