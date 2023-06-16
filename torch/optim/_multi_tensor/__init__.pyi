@@ -5,6 +5,7 @@ from torch import optim
 Adam = partial(optim.Adam, foreach=True)
 AdamW = partial(optim.AdamW, foreach=True)
 NAdam = partial(optim.NAdam, foreach=True)
+NAdamW = partial(optim.NAdamW, foreach=True)
 SGD = partial(optim.SGD, foreach=True)
 RAdam = partial(optim.RAdam, foreach=True)
 RMSprop = partial(optim.RMSprop, foreach=True)

@@ -18,6 +18,7 @@ def partialclass(cls, *args, **kwargs):
 Adam = partialclass(optim.Adam, foreach=True)
 AdamW = partialclass(optim.AdamW, foreach=True)
 NAdam = partialclass(optim.NAdam, foreach=True)
+NAdamW = partialclass(optim.NAdamW, foreach=True)
 SGD = partialclass(optim.SGD, foreach=True)
 RAdam = partialclass(optim.RAdam, foreach=True)
 RMSprop = partialclass(optim.RMSprop, foreach=True)

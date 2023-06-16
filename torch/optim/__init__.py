@@ -18,6 +18,7 @@ from .rprop import Rprop
 from .rmsprop import RMSprop
 from .optimizer import Optimizer
 from .nadam import NAdam
+from .nadamw import NAdamW
 from .lbfgs import LBFGS
 from . import lr_scheduler
 from . import swa_utils
@@ -35,4 +36,5 @@ del rprop
 del rmsprop
 del optimizer
 del nadam
+del nadamw
 del lbfgs
