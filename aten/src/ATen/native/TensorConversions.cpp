@@ -1027,23 +1027,8 @@ static Tensor sparse_compressed_clone(
     const Tensor& self,
     c10::optional<IntArrayRef> blocksize,
     const std::string& name) {
-  _check_blocksize_matches(self, blocksize, name);
-  // Just returning self doesn't work
-  // RuntimeError: t.use_count() <= 1 INTERNAL ASSERT FAILED at
-  // "../torch/csrc/autograd/autograd_not_implemented_fallback.cpp":152,
-  // please report a bug to PyTorch.
-  const auto layout = self.layout();
-  Tensor compressed_indices, plain_indices;
-  std::tie(compressed_indices, plain_indices) = at::sparse_csr::getCompressedPlainIndices(self);
-  auto values = self.values();
-  return _sparse_compressed_tensor_unsafe(
-      compressed_indices,
-      plain_indices,
-      values,
-      self.sizes(),
-      values.scalar_type(),
-      layout,
-      values.device());
+    _check_blocksize_matches(self, blocksize, name);
+    return self.alias();
 }
 
 static Tensor sparse_compressed_to_flipped(
@@ -1722,7 +1707,7 @@ Tensor sparse_compressed_to_sparse_bsc(const Tensor& self, IntArrayRef blocksize
 Tensor sparse_coo_to_sparse(const Tensor& self, const int64_t sparse_dim) {
   TORCH_CHECK(
      sparse_dim == self.sparse_dim(), "sparse dim argument for sparse_coo_to_sparse must not be different than sparse dim of original tensor");
-  return self;
+  return self.alias();
 }
 
 Tensor sparse_compressed_to_sparse(const Tensor& self, const int64_t sparse_dim) {
@@ -1783,7 +1768,7 @@ Tensor sparse_compressed_to_sparse(const Tensor& self, c10::optional<c10::Layout
     AT_ERROR("sparse_compressed_to_sparse for ", self.layout(), " to ", layout_, " conversion does not support specifying number of dense dimensions");
   }
   if (self.layout() == layout_ && (!blocksize.has_value() || at::sparse_csr::getBlockSize(self) == *blocksize)) {
-    return self;
+    return self.alias();
   }
   switch (layout_) {
   case kStrided:
@@ -1828,13 +1813,13 @@ Tensor sparse_coo_to_sparse(const Tensor& self, c10::optional<c10::Layout> layou
     AT_ERROR("sparse_coo_to_sparse for ", self.layout(), " to ", layout_, " conversion does not support specifying number of dense dimensions");
   }
   if (self.layout() == layout_) {
-    return self;
+    return self.alias();
   }
   switch (layout_) {
   case kStrided:
     return self.to_dense(c10::nullopt, c10::nullopt);
   case kSparse:
-    return self;
+    return self.alias();
   case kSparseCsr:
     return self.to_sparse_csr(dense_dim_opt);
   case kSparseCsc:
