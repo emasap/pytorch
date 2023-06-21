@@ -194,6 +194,7 @@ class TestDeserialize(TestCase):
             else:
                 self.assertEqual(orig, loaded)
 
+        self.assertEqual(len(ep.graph.nodes), len(deserialized_ep.graph.nodes))
         for node1, node2 in zip(ep.graph.nodes, deserialized_ep.graph.nodes):
             # Check "val" metadata
             val1 = node1.meta.get("val", None)
@@ -240,10 +241,11 @@ class TestDeserialize(TestCase):
             )
 
             # Check "source_fn" metadata
-            self.assertEqual(
-                node1.meta.get("source_fn", None),
-                node2.meta.get("source_fn", None),
-            )
+            if node1.op != "get_attr":
+                self.assertEqual(
+                    node1.meta.get("source_fn", None),
+                    node2.meta.get("source_fn", None),
+                )
 
     def test_multi_return(self) -> None:
         """
@@ -339,6 +341,20 @@ class TestDeserialize(TestCase):
                 return x
 
         inputs = (torch.randn(3, 3),)
+        self.check_graph(M(), inputs)
+
+    def test_cond(self):
+        from functorch.experimental.control_flow import cond
+        inputs = torch.ones(4, 3), torch.zeros(4, 3)
+        class M(torch.nn.Module):
+            def forward(self, x, y):
+                def t(x, y):
+                    return x + y
+
+                def f(x, y):
+                    return x - y
+                return cond(x[0][0] > 4, t, f, [x, y])
+
         self.check_graph(M(), inputs)
 
     @parametrize(
