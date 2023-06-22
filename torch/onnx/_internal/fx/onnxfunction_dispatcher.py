@@ -7,13 +7,13 @@ import warnings
 from typing import (
     Any,
     Callable,
-    Collection,
     Dict,
     Optional,
     Protocol,
     runtime_checkable,
     Sequence,
     Set,
+    Tuple,
     TYPE_CHECKING,
     Union,
 )
@@ -21,7 +21,6 @@ from typing import (
 import torch
 import torch._ops
 import torch.fx
-from torch.onnx import _constants
 from torch.onnx._internal import _beartype
 from torch.onnx._internal.fx import (
     diagnostics,
@@ -107,15 +106,16 @@ class OnnxFunctionDispatcher:
         aten_name = self.get_aten_name(node, diagnostic_context)
         # If there are no overloaded functions available for the given FX node, raise an
         # unsupported error
-        function_overloads = self.get_function_overloads(
-            node, aten_name, diagnostic_context
+        all_functions, custom_functions = self.get_function_overloads(
+            node, aten_name, onnx_args, diagnostic_context
         )
         # If there are overloaded functions available, we will find one that perfect or
         # nearest matches the given arguments and keyword arguments
         return self._find_the_perfect_or_nearest_match_onnxfunction(
             node,
             aten_name,
-            function_overloads,
+            all_functions,
+            custom_functions,
             onnx_args,
             onnx_kwargs,
             diagnostic_context,
@@ -126,25 +126,35 @@ class OnnxFunctionDispatcher:
         self,
         node: torch.fx.Node,
         aten_name: str,
-        function_overloads: Set[
-            Union["onnxscript.OnnxFunction", "onnxscript.TracedOnnxFunction"]
-        ],
+        all_functions: Set[registration.SymbolicFunction],
+        custom_functions: Optional[Set[registration.SymbolicFunction]],
         onnx_args: Sequence[Optional[Union[_TensorLike, str, int, float, bool, list]]],
         onnx_kwargs: Dict[str, fx_type_utils.Argument],
         diagnostic_context: diagnostics.DiagnosticContext,
     ):
         """Find the perfect/nearest matched OnnxFunction for the given FX node, arguments, and keyword arguments."""
-        overload_match_ranking: Dict[
-            Union[onnxscript.OnnxFunction, onnxscript.TracedOnnxFunction], int
-        ] = {}
         # TODO(justinchuby): Cache the OpSchemaWrapper so we don't need to run the init logic everytime
-        for overload_func in function_overloads:
+        overload_match_ranking: Dict[registration.SymbolicFunction, int] = {}
+
+        # If there are custom functions, we will try to find the perfect match first
+        if custom_functions is not None:
+            for custom_symbolic_function in custom_functions:
+                overload_func = custom_symbolic_function.onnx_function
+                function_opschema = _OpSchemaWrapper(overload_func.op_schema)
+                if function_opschema.perfect_match_inputs(onnx_args, onnx_kwargs):
+                    # If the perfect match is found, return the function
+                    return overload_func
+
+        # If there are no custom functions or the perfect match is not found, we will
+        # try to find the nearest match among all functions
+        for symbolic_function in all_functions:
+            overload_func = symbolic_function.onnx_function
             function_opschema = _OpSchemaWrapper(overload_func.op_schema)
             if function_opschema.perfect_match_inputs(onnx_args, onnx_kwargs):
                 # If the perfect match is found, return the function
                 return overload_func
             # Record the match score for the nearest match if it's not the perfect match
-            overload_match_ranking[overload_func] = function_opschema.match_score
+            overload_match_ranking[symbolic_function] = function_opschema.match_score
 
         # TODO(titaiwang): Change inflight_diagnostic to a new rule. Do we need to handle
         # the special case where the same scores happended?
@@ -161,7 +171,13 @@ class OnnxFunctionDispatcher:
             unsupported_fx_node=node,
         )
         diagnostic_context.log(diagnostic)
-        return max(overload_match_ranking, key=overload_match_ranking.get)  # type: ignore[arg-type]
+        # Tie breaker: if there are multiple nearest matches, we will choose the one
+        # that is custom first
+        return sorted(
+            overload_match_ranking,
+            key=lambda k: (overload_match_ranking[k], k.is_custom),
+            reverse=True,
+        )
 
     @_beartype.beartype
     def get_aten_name(
@@ -236,8 +252,11 @@ class OnnxFunctionDispatcher:
         self,
         node: torch.fx.Node,
         aten_name: str,
+        onnx_args: Sequence[Optional[Union[_TensorLike, str, int, float, bool, list]]],
         diagnostic_context: diagnostics.DiagnosticContext,
-    ) -> Set[Union["onnxscript.OnnxFunction", "onnxscript.TracedOnnxFunction"]]:
+    ) -> Tuple[
+        Set[registration.SymbolicFunction], Optional[Set[registration.SymbolicFunction]]
+    ]:
         """Get the function overloads from the registry.
 
         Args:
@@ -248,31 +267,36 @@ class OnnxFunctionDispatcher:
         Returns:
             Set of function overloads.
         """
-        function_group = None
 
-        if self.onnx_registry.is_registered_op(aten_name, self.opset_version):
-            function_group = self.onnx_registry.get_function_group(aten_name)
+        function_group = None
+        custom_function_group = None
+        complex_input = any(torch.is_complex(arg) for arg in onnx_args if isinstance(arg, _TensorLike))  # type: ignore[arg-type]
+
+        if self.onnx_registry.is_registered_op(aten_name):
+            function_group = self.onnx_registry.get_functions(
+                aten_name, complex=complex_input
+            )
+            custom_function_group = self.onnx_registry.get_custom_functions(
+                aten_name, complex=complex_input
+            )
 
         # Fall back to overloadpacket name: eg: aten.add.Tensor -> aten::add
         elif hasattr(
             node.target, "overloadpacket"
         ) and self.onnx_registry.is_registered_op(
             node.target.overloadpacket._qualified_op_name,  # type: ignore[union-attr]
-            self.opset_version,
         ):
-            function_group = self.onnx_registry.get_function_group(
-                node.target.overloadpacket._qualified_op_name  # type: ignore[union-attr]
+            function_group = self.onnx_registry.get_functions(
+                node.target.overloadpacket._qualified_op_name,  # type: ignore[union-attr]
+                complex=complex_input,
+            )
+            custom_function_group = self.onnx_registry.get_custom_functions(
+                node.target.overloadpacket._qualified_op_name,  # type: ignore[union-attr]
+                complex=complex_input,
             )
 
         if function_group is not None:
-            # TODO(titaiwang): dispatch opset version.
-            dispatched_version = _dispatch_opset_version(
-                self.opset_version, function_group.support_opset()
-            )
-            if dispatched_version is not None:
-                function_overloads = function_group.get(dispatched_version)
-                if function_overloads is not None:
-                    return function_overloads
+            return function_group, custom_function_group
 
         diagnostic = diagnostics.UnsupportedFxNodeDiagnostic(
             diagnostics.rules.no_symbolic_function_for_call_function,
@@ -300,48 +324,6 @@ def _symint_symfloat_builtin_to_exporter_key_table(
         operator.sub: torch.ops.aten.sub.default,  # type: ignore[has-type]
     }
     return _SYMINT_SYMFLOAT_BUILTIN_TO_EXPORTER_KEY_TABLE.get(target)
-
-
-@_beartype.beartype
-def _dispatch_opset_version(
-    target: int, registered_opsets: Collection[int]
-) -> Optional[int]:
-    """Finds the registered opset given a target opset version and the available opsets.
-
-    O(number of registered versions of an op) search is performed to find the most
-    recent version of the op.
-
-    Args:
-        target: The target opset version.
-        registered_opsets: The available opsets.
-
-    Returns:
-        The registered opset version.
-    """
-    if not registered_opsets:
-        return None
-
-    descending_registered_versions = sorted(registered_opsets, reverse=True)
-    # Linear search for the opset version, which is fine since the number of opset
-    # versions is small.
-
-    if target >= _constants.ONNX_BASE_OPSET:
-        # Always look down toward opset 1 when the target is >= ONNX_BASE_OPSET (opset 9).
-        # When a custom op is register at opset 1, we want to be able to discover it as a
-        # fallback for all opsets >= ONNX_BASE_OPSET.
-        for version in descending_registered_versions:
-            if version <= target:
-                return version
-        return None
-
-    # target < opset 9. This is the legacy behavior to support opset 7 and opset 8.
-    # for caffe2 support. We search up toward opset 9.
-    for version in reversed(descending_registered_versions):
-        # Count back up until _constants.ONNX_BASE_OPSET
-        if target <= version <= _constants.ONNX_BASE_OPSET:
-            return version
-
-    return None
 
 
 class _OpSchemaWrapper:
