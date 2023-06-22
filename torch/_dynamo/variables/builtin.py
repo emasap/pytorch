@@ -600,6 +600,7 @@ class BuiltinVariable(VariableTracker):
         if has_constant_handler:
             args, kwargs = specialize_args_kwargs(tx, args, kwargs)
             # constant fold
+            print("CONSTANT FOLDING?", self.fn, args, kwargs)
             return variables.ConstantVariable(
                 self.as_python_constant()(
                     *[x.as_python_constant() for x in args],
@@ -1071,8 +1072,8 @@ class BuiltinVariable(VariableTracker):
                 return TorchHigherOrderOperatorVariable(
                     get_higher_order_op(member), **options
                 )
-            elif is_allowed(member):
-                return TorchVariable(member, **options)
+            # elif is_allowed(member):
+            #     return TorchVariable(member, **options)
             elif ConstantVariable.is_literal(member):
                 return ConstantVariable(member, **options)
             else:
@@ -1105,6 +1106,9 @@ class BuiltinVariable(VariableTracker):
             tx.output.side_effects.is_attribute_mutation(obj)
             and name_var.is_python_constant()
         ):
+            if isinstance(obj, variables.TensorVariable):
+                if name_var.value == "data":
+                    unimplemented("Setting data on a tensor is not supported.")
             tx.output.side_effects.store_attr(obj, name_var.as_python_constant(), val)
             return val.add_options(self, obj, name_var)
         elif isinstance(obj, variables.UserDefinedObjectVariable):
