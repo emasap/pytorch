@@ -1,7 +1,9 @@
 import torch
 import copy
-from typing import Dict
+from typing import Dict, Tuple
 from torch._ops import OpOverload
+from torch._functorch.aot_autograd import FQN
+from dataclasses import dataclass
 
 aten = torch.ops.aten
 
@@ -11,7 +13,18 @@ _NON_FUNCTIONAL_TO_FUNCTIONAL_SIDE_EFFECTFUL_FUNCS: Dict[OpOverload, OpOverload]
 }
 
 
-def _functionalize_side_effectful_ops(gm: torch.fx.GraphModule) -> torch.fx.GraphModule:
+@dataclass
+class SideEffectOpsFunctionalizationResult:
+    # Graph module with assertions functionalized.
+    graph_module: torch.fx.GraphModule
+    # FQN of assertion dependency token in output.
+    dep_token_output: FQN
+    # Index of dependency token in output.
+    dep_token_output_index: int
+
+def _functionalize_side_effectful_ops(
+    gm: torch.fx.GraphModule,
+) -> Tuple[torch.fx.GraphModule, FQN]:
     """
     Functionalize ops with side effect in graph module by replacing the op with
     functional version of it. A new dependency token (`dep_token`) will be
@@ -64,9 +77,24 @@ def _functionalize_side_effectful_ops(gm: torch.fx.GraphModule) -> torch.fx.Grap
             graph.erase_node(n)
 
     output_node = next(n for n in graph.nodes if n.op == "output")
+    # Always appending `dep_token` node to the end of outputs. If `gm` is after
+    # AOT export, the outputs will be in format (updated_inputs, user_outputs, dep_token).
+    # NOTE: extra change might be needed if `trace_joint` is enabled while calling
+    # `aot_export_module` (since `param_gradients` will be added as well). However
+    # ignore this case for now since:
+    # - It's always disabled in current export logic as
+    #   https://github.com/pytorch/pytorch/blob/def1b57151687abd585e3000dd10907b8be01266/torch/_export/__init__.py#L188
+    # - Extra callsites like
+    #   https://github.com/pytorch/pytorch/blob/def1b57151687abd585e3000dd10907b8be01266/torch/_export/exported_program.py#L119
+    #   will need to be changed.
     graph.output(output_node.args[0] + (dep_token,))
     graph.erase_node(output_node)
 
     graph.lint()
     gm.recompile()
-    return gm
+
+    return SideEffectOpsFunctionalizationResult(
+        graph_module=gm,
+        dep_token_output=str(dep_token),
+        dep_token_output_index=len(output_node.args[0]),
+    )
