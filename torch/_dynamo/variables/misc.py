@@ -15,6 +15,7 @@ from ..utils import (
     check_constant_args,
     HAS_NUMPY_TORCH_INTEROP,
     identity,
+    numpy_dtype_to_torch_dtype,
     proxy_args_kwargs,
 )
 from .base import MutableLocal, VariableTracker
@@ -835,6 +836,18 @@ class NumpyVariable(VariableTracker):
         return type(self.value)
 
     def as_python_constant(self):
+        return self.value
+
+    def as_proxy(self):
+        # return self.value
+        if isinstance(self.value, type) and config.numpy_ndarray_as_tensor:
+            import numpy as np
+
+            # convert numpy dtype to torch types
+            if self.value in numpy_dtype_to_torch_dtype:
+                return numpy_dtype_to_torch_dtype[self.value]
+            unimplemented(f"Unsupported type {self.value} in numpy")
+
         return self.value
 
 
