@@ -245,6 +245,19 @@ def set_device(device: _device_t) -> None:
     if device >= 0:
         torch._C._accelerator_hooks_set_current_device(device)
 
+def get_device_properties(device: Optional[_device_t] = None) -> dict[str, Any]:
+    r"""Return a dictionary of MTIA device properties
+
+    Args:
+        device (torch.device or int, optional) selected device. Returns
+            statistics for the current device, given by current_device(),
+            if device is None (default).
+    """
+    torch._C._mtia_getDeviceProperties(_get_device_index(device, optional=True))
+    #return {
+    #    "total_memory": 192 * 1000 * 1000 * 1000, # 192GB
+    #}
+
 
 def get_device_properties(device: Optional[_device_t] = None) -> dict[str, Any]:
     r"""Return a dictionary of MTIA device properties
